@@ -6,11 +6,26 @@ A FastAPI service implementing momentum screening based on
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Any
 import uvicorn
+import json
 
 from .momentum import calculate_momentum, screen_stocks
+
+
+class PrettyJSONResponse(JSONResponse):
+    """Custom JSON response with pretty formatting."""
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+            separators=(",", ": ")
+        ).encode("utf-8")
+
 
 app = FastAPI(
     title="Quantitative Momentum API",
@@ -34,7 +49,8 @@ app = FastAPI(
     For positive momentum stocks, a more negative FIP indicates smoother, 
     more consistent gains (preferred).
     """,
-    version="1.0.0"
+    version="1.0.0",
+    default_response_class=PrettyJSONResponse
 )
 
 
@@ -80,36 +96,35 @@ async def get_momentum(ticker: str):
     """
     Get momentum data for a single stock.
     
-    Returns:
-    - **momentum_12_1**: 12-month return excluding most recent month (decimal)
-    - **fip_score**: Frog-in-the-Pan quality score
-    - **positive_days_pct**: Percentage of positive return days
-    - **negative_days_pct**: Percentage of negative return days
-    - **fip_interpretation**: Human-readable quality assessment
+    Returns a well-structured JSON response with:
+    - **momentum**: 12-1 month return with value and percentage
+    - **fip**: Frog-in-the-Pan quality score with interpretation
+    - **data_range**: Date range and trading days used
     
     Example: GET /momentum/AAPL
     """
     result = calculate_momentum(ticker.upper().strip())
     
     if result.error:
-        raise HTTPException(status_code=400, detail=result.error)
+        raise HTTPException(status_code=400, detail={
+            "error": result.error,
+            "ticker": ticker.upper().strip()
+        })
     
     data = result.to_dict()
     
-    # Add interpretation
+    # Add FIP quality interpretation
     if result.momentum_12_1 is not None and result.fip_score is not None:
         if result.momentum_12_1 > 0:
-            data['fip_interpretation'] = "smooth" if result.fip_score < -0.1 else "lumpy" if result.fip_score > 0.1 else "moderate"
+            quality = "smooth" if result.fip_score < -0.1 else "lumpy" if result.fip_score > 0.1 else "moderate"
         else:
-            data['fip_interpretation'] = "smooth" if result.fip_score > 0.1 else "lumpy" if result.fip_score < -0.1 else "moderate"
-    else:
-        data['fip_interpretation'] = None
+            quality = "smooth" if result.fip_score > 0.1 else "lumpy" if result.fip_score < -0.1 else "moderate"
+        data["fip"]["quality"] = quality
     
-    # Add human-readable momentum
-    if result.momentum_12_1 is not None:
-        data['momentum_12_1_pct'] = f"{result.momentum_12_1 * 100:.2f}%"
-    
-    return data
+    return {
+        "status": "success",
+        "data": data
+    }
 
 
 @app.post("/screen", tags=["Screening"])
@@ -121,11 +136,10 @@ async def screen(request: ScreenRequest):
     1. 12-1 month momentum (primary sort, descending)
     2. FIP quality score (secondary indicator)
     
-    Each stock includes:
-    - **momentum_rank**: Position in momentum ranking
-    - **momentum_12_1**: 12-month return excluding most recent month
-    - **fip_score**: Frog-in-the-Pan quality score
-    - **fip_interpretation**: Quality assessment (smooth/moderate/lumpy)
+    Returns a well-structured JSON response with:
+    - **summary**: Overview of screening results
+    - **results**: Ranked list of stocks with momentum and FIP data
+    - **methodology_notes**: Explanation of the scoring system
     
     Example request body:
     ```json
@@ -136,10 +150,16 @@ async def screen(request: ScreenRequest):
     ```
     """
     if not request.tickers:
-        raise HTTPException(status_code=400, detail="At least one ticker required")
+        raise HTTPException(status_code=400, detail={
+            "error": "At least one ticker required",
+            "received": []
+        })
     
     results = screen_stocks(request.tickers, request.top_n)
-    return results
+    return {
+        "status": "success",
+        **results
+    }
 
 
 @app.get("/", tags=["Info"])
@@ -148,18 +168,39 @@ async def root():
     API information and quick start guide.
     """
     return {
-        "service": "Quantitative Momentum API",
-        "version": "1.0.0",
-        "description": "Stock screening based on Gray & Vogel's Quantitative Momentum",
-        "endpoints": {
-            "GET /health": "Health check",
-            "GET /momentum/{ticker}": "Get momentum data for single stock",
-            "POST /screen": "Screen multiple stocks"
+        "service": {
+            "name": "Quantitative Momentum API",
+            "version": "1.0.0",
+            "description": "Stock screening based on Gray & Vogel's Quantitative Momentum"
         },
-        "quick_start": {
-            "single_stock": "curl http://localhost:8000/momentum/AAPL",
-            "screen_stocks": "curl -X POST http://localhost:8000/screen -H 'Content-Type: application/json' -d '{\"tickers\": [\"AAPL\", \"MSFT\", \"GOOGL\"]}'"
-        }
+        "endpoints": [
+            {
+                "method": "GET",
+                "path": "/health",
+                "description": "Health check"
+            },
+            {
+                "method": "GET",
+                "path": "/momentum/{ticker}",
+                "description": "Get momentum data for a single stock"
+            },
+            {
+                "method": "POST",
+                "path": "/screen",
+                "description": "Screen multiple stocks with ranking"
+            }
+        ],
+        "examples": {
+            "single_stock": {
+                "command": "curl http://localhost:8000/momentum/AAPL",
+                "description": "Get momentum data for Apple"
+            },
+            "screen_stocks": {
+                "command": "curl -X POST http://localhost:8000/screen -H 'Content-Type: application/json' -d '{\"tickers\": [\"AAPL\", \"MSFT\", \"GOOGL\"]}'",
+                "description": "Screen and rank multiple stocks"
+            }
+        },
+        "documentation": "/docs"
     }
 
 

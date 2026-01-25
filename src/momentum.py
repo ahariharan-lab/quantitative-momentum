@@ -28,17 +28,30 @@ class MomentumResult:
     error: Optional[str] = None
     
     def to_dict(self) -> dict:
-        return {
+        """Convert to well-formatted dictionary for JSON output."""
+        result = {
             "ticker": self.ticker,
-            "momentum_12_1": round(self.momentum_12_1, 4) if self.momentum_12_1 is not None else None,
-            "fip_score": round(self.fip_score, 4) if self.fip_score is not None else None,
-            "positive_days_pct": round(self.positive_days_pct, 4) if self.positive_days_pct is not None else None,
-            "negative_days_pct": round(self.negative_days_pct, 4) if self.negative_days_pct is not None else None,
-            "total_trading_days": self.total_trading_days,
-            "start_date": self.start_date,
-            "end_date": self.end_date,
-            "error": self.error
+            "momentum": {
+                "value": round(self.momentum_12_1, 4) if self.momentum_12_1 is not None else None,
+                "percentage": f"{self.momentum_12_1 * 100:.2f}%" if self.momentum_12_1 is not None else None,
+                "period": "12-1 months"
+            },
+            "fip": {
+                "score": round(self.fip_score, 4) if self.fip_score is not None else None,
+                "positive_days": f"{self.positive_days_pct * 100:.1f}%" if self.positive_days_pct is not None else None,
+                "negative_days": f"{self.negative_days_pct * 100:.1f}%" if self.negative_days_pct is not None else None
+            },
+            "data_range": {
+                "start": self.start_date,
+                "end": self.end_date,
+                "trading_days": self.total_trading_days
+            }
         }
+        
+        if self.error:
+            result["error"] = self.error
+            
+        return result
 
 
 def calculate_momentum(ticker: str) -> MomentumResult:
@@ -208,33 +221,54 @@ def screen_stocks(tickers: list[str], top_n: Optional[int] = None) -> dict:
     # Simple approach: rank by momentum, use FIP as tiebreaker/quality indicator
     results.sort(key=lambda x: (x.momentum_12_1 or float('-inf')), reverse=True)
     
-    # Assign ranks
+    # Assign ranks and build structured results
     ranked_results = []
     for i, result in enumerate(results):
-        data = result.to_dict()
-        data['momentum_rank'] = i + 1
-        # FIP interpretation: for positive momentum, more negative = smoother
-        # We'll add a "quality_interpretation" field
+        # Determine FIP quality interpretation
         if result.momentum_12_1 is not None and result.fip_score is not None:
             if result.momentum_12_1 > 0:
-                data['fip_interpretation'] = "smooth" if result.fip_score < -0.1 else "lumpy" if result.fip_score > 0.1 else "moderate"
+                quality = "smooth" if result.fip_score < -0.1 else "lumpy" if result.fip_score > 0.1 else "moderate"
             else:
-                data['fip_interpretation'] = "smooth" if result.fip_score > 0.1 else "lumpy" if result.fip_score < -0.1 else "moderate"
+                quality = "smooth" if result.fip_score > 0.1 else "lumpy" if result.fip_score < -0.1 else "moderate"
         else:
-            data['fip_interpretation'] = None
-        ranked_results.append(data)
+            quality = None
+        
+        ranked_results.append({
+            "rank": i + 1,
+            "ticker": result.ticker,
+            "momentum": {
+                "value": round(result.momentum_12_1, 4) if result.momentum_12_1 is not None else None,
+                "percentage": f"{result.momentum_12_1 * 100:.2f}%" if result.momentum_12_1 is not None else None
+            },
+            "fip": {
+                "score": round(result.fip_score, 4) if result.fip_score is not None else None,
+                "quality": quality
+            },
+            "data_range": {
+                "start": result.start_date,
+                "end": result.end_date,
+                "trading_days": result.total_trading_days
+            }
+        })
     
     if top_n:
         ranked_results = ranked_results[:top_n]
     
     return {
-        "screened_count": len(ranked_results),
-        "error_count": len(errors),
-        "stocks": ranked_results,
-        "errors": errors,
-        "methodology": {
-            "momentum": "12-1 month return (skip most recent month to avoid reversal)",
-            "fip": "Frog-in-the-Pan: sign(momentum) × (% negative days - % positive days)",
-            "fip_interpretation": "For positive momentum: negative FIP = smooth/consistent gains (preferred)"
+        "summary": {
+            "total_screened": len(ranked_results),
+            "total_errors": len(errors),
+            "methodology": "Quantitative Momentum (Gray & Vogel)"
+        },
+        "results": ranked_results,
+        "errors": errors if errors else None,
+        "methodology_notes": {
+            "momentum_period": "12-1 months (skip most recent month to avoid reversal)",
+            "fip_formula": "sign(momentum) × (% negative days - % positive days)",
+            "fip_quality": {
+                "smooth": "Consistent, steady gains (preferred for positive momentum)",
+                "moderate": "Mixed pattern of gains",
+                "lumpy": "Volatile, concentrated gains (less reliable)"
+            }
         }
     }
