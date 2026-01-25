@@ -58,6 +58,8 @@ def calculate_momentum(ticker: str) -> MomentumResult:
     """
     Calculate 12-1 month momentum and FIP score for a single ticker.
     
+    Ticker is normalized to uppercase with whitespace stripped.
+    
     12-1 Month Momentum:
     - Look back 12 months from today
     - Skip the most recent month (to avoid short-term reversal)
@@ -98,6 +100,9 @@ def calculate_momentum(ticker: str) -> MomentumResult:
     Alternative formulation: Quality = -FIP for sorting purposes.
     Or we just report raw FIP and let the user interpret.
     """
+    # Normalize ticker
+    ticker = ticker.upper().strip()
+    
     try:
         # Calculate date range: need 13 months of data to get 12-1
         end_date = datetime.now()
@@ -130,8 +135,16 @@ def calculate_momentum(ticker: str) -> MomentumResult:
         one_month_ago = end_date - timedelta(days=21)  # ~1 trading month
         twelve_months_ago = end_date - timedelta(days=252)  # ~12 trading months
         
+        # Convert to timezone-aware timestamps if the dataframe index is timezone-aware
+        if df.index.tz is not None:
+            one_month_ago_ts = pd.Timestamp(one_month_ago).tz_localize(df.index.tz)
+            twelve_months_ago_ts = pd.Timestamp(twelve_months_ago).tz_localize(df.index.tz)
+        else:
+            one_month_ago_ts = pd.Timestamp(one_month_ago)
+            twelve_months_ago_ts = pd.Timestamp(twelve_months_ago)
+        
         # Filter to the 12-1 month window
-        mask = (df.index <= pd.Timestamp(one_month_ago)) & (df.index >= pd.Timestamp(twelve_months_ago))
+        mask = (df.index <= one_month_ago_ts) & (df.index >= twelve_months_ago_ts)
         momentum_period = df[mask]
         
         if len(momentum_period) < 100:  # Need reasonable amount of data
