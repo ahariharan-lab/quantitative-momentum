@@ -50,6 +50,19 @@ pip install -r requirements.txt
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+### Running Tests
+
+```bash
+# Install test dependencies
+pip install pytest httpx
+
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage
+pytest tests/ -v --cov=src
+```
+
 ## API Endpoints
 
 ### Health Check
@@ -79,17 +92,26 @@ curl http://localhost:8000/momentum/AAPL
 **Response:**
 ```json
 {
-  "ticker": "AAPL",
-  "momentum_12_1": 0.2534,
-  "momentum_12_1_pct": "25.34%",
-  "fip_score": -0.0892,
-  "positive_days_pct": 0.5446,
-  "negative_days_pct": 0.4554,
-  "total_trading_days": 224,
-  "start_date": "2024-01-15",
-  "end_date": "2024-12-15",
-  "fip_interpretation": "smooth",
-  "error": null
+  "status": "success",
+  "data": {
+    "ticker": "AAPL",
+    "momentum": {
+      "value": 0.2534,
+      "percentage": "25.34%",
+      "period": "12-1 months"
+    },
+    "fip": {
+      "score": -0.0892,
+      "quality": "smooth",
+      "positive_days": "54.5%",
+      "negative_days": "45.5%"
+    },
+    "data_range": {
+      "start": "2024-01-15",
+      "end": "2024-12-15",
+      "trading_days": 224
+    }
+  }
 }
 ```
 
@@ -116,28 +138,40 @@ curl -X POST http://localhost:8000/screen \
 **Response:**
 ```json
 {
-  "screened_count": 3,
-  "error_count": 0,
-  "stocks": [
+  "status": "success",
+  "summary": {
+    "total_screened": 3,
+    "total_errors": 0,
+    "methodology": "Quantitative Momentum (Gray & Vogel)"
+  },
+  "results": [
     {
+      "rank": 1,
       "ticker": "NVDA",
-      "momentum_12_1": 0.8921,
-      "fip_score": -0.1234,
-      "positive_days_pct": 0.5617,
-      "negative_days_pct": 0.4383,
-      "total_trading_days": 224,
-      "start_date": "2024-01-15",
-      "end_date": "2024-12-15",
-      "momentum_rank": 1,
-      "fip_interpretation": "smooth"
-    },
-    ...
+      "momentum": {
+        "value": 0.8921,
+        "percentage": "89.21%"
+      },
+      "fip": {
+        "score": -0.1234,
+        "quality": "smooth"
+      },
+      "data_range": {
+        "start": "2024-01-15",
+        "end": "2024-12-15",
+        "trading_days": 224
+      }
+    }
   ],
-  "errors": [],
-  "methodology": {
-    "momentum": "12-1 month return (skip most recent month to avoid reversal)",
-    "fip": "Frog-in-the-Pan: sign(momentum) × (% negative days - % positive days)",
-    "fip_interpretation": "For positive momentum: negative FIP = smooth/consistent gains (preferred)"
+  "errors": null,
+  "methodology_notes": {
+    "momentum_period": "12-1 months (skip most recent month to avoid reversal)",
+    "fip_formula": "sign(momentum) × (% negative days - % positive days)",
+    "fip_quality": {
+      "smooth": "Consistent, steady gains (preferred for positive momentum)",
+      "moderate": "Mixed pattern of gains",
+      "lumpy": "Volatile, concentrated gains (less reliable)"
+    }
   }
 }
 ```
