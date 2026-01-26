@@ -12,7 +12,10 @@ from typing import Optional, Any
 import uvicorn
 import json
 
-from .momentum import calculate_momentum, screen_stocks
+try:
+    from src.momentum import calculate_momentum, screen_stocks
+except ImportError:
+    from momentum import calculate_momentum, screen_stocks
 
 
 class PrettyJSONResponse(JSONResponse):
