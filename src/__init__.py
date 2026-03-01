@@ -1,1 +1,0 @@
-# Quantitative Momentum Service

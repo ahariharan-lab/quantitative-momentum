@@ -1,225 +1,211 @@
-# Quantitative Momentum API
+# Quantitative Momentum
 
-A FastAPI web service implementing stock screening based on **"Quantitative Momentum"** by Wesley Gray and Jack Vogel.
+A serverless S&P 100 momentum screener built on **Cloudflare Workers**, implementing the quantitative momentum strategy from *Quantitative Momentum* by Wesley Gray and Jack Vogel.
 
-## Key Methodology
+All momentum calculations run in three staggered cron jobs every 8 hours. HTTP endpoints are pure KV reads — zero live API calls in the request path, sub-millisecond response times. Runs entirely on Cloudflare's free tier.
+
+Data source: [Twelve Data API](https://twelvedata.com) (free tier: 800 requests/day).
+
+---
+
+## Methodology
 
 ### 12-1 Month Momentum
-Calculate returns over the past 12 months, **excluding the most recent month**. This avoids short-term reversal effects that can distort momentum signals.
+
+Returns over the past 12 months, **excluding the most recent month**. Skipping the final month avoids the well-documented short-term reversal effect.
 
 ### Frog-in-the-Pan (FIP) Quality Score
-The FIP score measures how "smooth" or "lumpy" the momentum is:
+
+Measures whether momentum arrived smoothly (many small gains) or lumpily (few large jumps):
 
 ```
-FIP = sign(momentum) × (% negative days - % positive days)
+FIP = sign(momentum) × (% negative days − % positive days)
 ```
 
-- **Smooth momentum** (many small daily gains) = Higher quality, preferred
-- **Lumpy momentum** (few big jumps) = Lower quality, potentially news-driven
+- **Smooth momentum** — many small daily gains — consistent, reliable signal — preferred
+- **Lumpy momentum** — few large jumps — often news-driven, less reliable
 
-For positive momentum stocks, a **more negative FIP** indicates smoother, more consistent gains.
+For positive-momentum stocks, a **more negative FIP score** indicates smoother, higher-quality momentum.
 
-## Installation
+| FIP Score   | Quality  | Interpretation                              |
+|-------------|----------|---------------------------------------------|
+| < −0.1      | Smooth   | Consistent daily gains — high quality       |
+| −0.1 to 0.1 | Moderate | Mixed pattern                               |
+| > 0.1       | Lumpy    | Driven by few large moves — less reliable   |
 
-### Using Docker (Recommended)
+---
 
-```bash
-# Clone the repository
-git clone https://github.com/YOUR_USERNAME/quantitative-momentum.git
-cd quantitative-momentum
+## Architecture
 
-# Build and run with Docker Compose
-docker-compose up --build
+Three cron triggers run in sequence, each writing pre-computed results to Cloudflare KV:
 
-# Or build manually
-docker build -t quantitative-momentum .
-docker run -p 8000:8000 quantitative-momentum
+```
+Cron A  00:00, 12:00 UTC   constituent refresh + tickers[0..47]   → momentum:partial:0
+Cron B  04:00, 16:00 UTC   tickers[48..95]                        → momentum:partial:1
+Cron C  08:00, 20:00 UTC   tickers[96..99] + merge A+B+C          → screen:sp100:latest
 ```
 
-### Local Development
+Full refresh every **8 hours**. HTTP endpoints read from KV — no live fetches, no computation in the request path. The rate limiter fetches 6 tickers in parallel with a 45-second delay between batches to stay within Twelve Data's 8 requests/minute limit.
 
-```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the server
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### Running Tests
-
-```bash
-# Install test dependencies
-pip install pytest httpx
-
-# Run all tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ -v --cov=src
-```
+---
 
 ## API Endpoints
 
-### Health Check
-```bash
-GET /health
-```
+All responses are JSON with CORS headers. Base URL after deployment:
+`https://quantitative-momentum.<subdomain>.workers.dev`
 
-**Response:**
+### `GET /health`
+
 ```json
 {
   "status": "healthy",
   "service": "quantitative-momentum",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "universe": "S&P 100 (dynamic)",
+  "plan": "free",
+  "refresh_schedule": "every 12 hours via 3-cron pipeline"
 }
 ```
 
-### Single Stock Momentum
+### `GET /screen?top=N`
+
+Full ranked screen. Optional `top` parameter limits results (1–100).
+
 ```bash
-GET /momentum/{ticker}
+curl https://quantitative-momentum.<subdomain>.workers.dev/screen?top=10
 ```
 
-**Example:**
-```bash
-curl http://localhost:8000/momentum/AAPL
-```
-
-**Response:**
 ```json
 {
-  "status": "success",
-  "data": {
-    "ticker": "AAPL",
-    "momentum": {
-      "value": 0.2534,
-      "percentage": "25.34%",
-      "period": "12-1 months"
-    },
-    "fip": {
-      "score": -0.0892,
-      "quality": "smooth",
-      "positive_days": "54.5%",
-      "negative_days": "45.5%"
-    },
-    "data_range": {
-      "start": "2024-01-15",
-      "end": "2024-12-15",
-      "trading_days": 224
-    }
-  }
-}
-```
-
-### Screen Multiple Stocks
-```bash
-POST /screen
-```
-
-**Request Body:**
-```json
-{
-  "tickers": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"],
-  "top_n": 5
-}
-```
-
-**Example:**
-```bash
-curl -X POST http://localhost:8000/screen \
-  -H "Content-Type: application/json" \
-  -d '{"tickers": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"], "top_n": 3}'
-```
-
-**Response:**
-```json
-{
-  "status": "success",
+  "status": "ok",
+  "generated_at": "2025-01-15T08:01:23.000Z",
   "summary": {
-    "total_screened": 3,
-    "total_errors": 0,
+    "total_screened": 98,
+    "total_errors": 2,
     "methodology": "Quantitative Momentum (Gray & Vogel)"
   },
   "results": [
     {
       "rank": 1,
       "ticker": "NVDA",
-      "momentum": {
-        "value": 0.8921,
-        "percentage": "89.21%"
-      },
-      "fip": {
-        "score": -0.1234,
-        "quality": "smooth"
-      },
-      "data_range": {
-        "start": "2024-01-15",
-        "end": "2024-12-15",
-        "trading_days": 224
-      }
+      "momentum": { "value": 0.8921, "percentage": "89.21%", "period": "12-1 months" },
+      "fip": { "score": -0.1234, "quality": "smooth", "positive_days": "58.3%", "negative_days": "41.7%" },
+      "data_range": { "start": "2024-01-15", "end": "2024-12-15", "trading_days": 231 }
     }
   ],
-  "errors": null,
-  "methodology_notes": {
-    "momentum_period": "12-1 months (skip most recent month to avoid reversal)",
-    "fip_formula": "sign(momentum) × (% negative days - % positive days)",
-    "fip_quality": {
-      "smooth": "Consistent, steady gains (preferred for positive momentum)",
-      "moderate": "Mixed pattern of gains",
-      "lumpy": "Volatile, concentrated gains (less reliable)"
-    }
-  }
+  "methodology_notes": { "..." : "..." }
 }
 ```
 
-## Interpreting Results
+### `GET /momentum/:ticker`
 
-### Momentum Score
-- **Positive**: Stock has gained value over the 12-1 month period
-- **Negative**: Stock has lost value
-- Higher absolute values indicate stronger momentum
+Single ticker result from the pre-computed screen.
 
-### FIP Score Interpretation
-For **positive momentum** stocks:
-| FIP Score | Interpretation | Quality |
-|-----------|----------------|---------|
-| < -0.1 | Smooth | ✅ High quality - consistent daily gains |
-| -0.1 to 0.1 | Moderate | ⚠️ Medium quality |
-| > 0.1 | Lumpy | ❌ Low quality - driven by few big moves |
-
-For **negative momentum** stocks, the interpretation is reversed.
-
-## Example Use Cases
-
-### Screen S&P 500 Sector Leaders
 ```bash
-curl -X POST http://localhost:8000/screen \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tickers": ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "UNH", "JNJ"],
-    "top_n": 5
-  }'
+curl https://quantitative-momentum.<subdomain>.workers.dev/momentum/AAPL
 ```
 
-### Build a Momentum Portfolio
-1. Screen your universe (e.g., S&P 500 components)
-2. Select top momentum stocks (e.g., top decile)
-3. Filter for high FIP quality (smooth momentum preferred)
-4. Rebalance monthly or quarterly
+Returns 404 if the ticker is not in the S&P 100, or 503 if the pipeline has not run yet.
 
-## API Documentation
+### `GET /universe`
 
-Interactive API documentation is available at:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+Active ticker list with the timestamp of the last constituent refresh.
+
+### `GET /universe/changelog`
+
+History of S&P 100 constituent changes (additions and removals), stored as the last 50 entries.
+
+### `GET /status`
+
+Cron pipeline status — when each cron last ran, how many tickers were processed, and any errors.
+
+---
+
+## Setup
+
+### Prerequisites
+
+1. **Node.js 18+**
+2. **Cloudflare account** — [sign up free](https://dash.cloudflare.com/sign-up)
+3. **Twelve Data API key** — [get a free key](https://twelvedata.com/pricing)
+
+### Install
+
+```bash
+git clone https://github.com/ahariharan-lab/quantitative-momentum.git
+cd quantitative-momentum
+npm install
+```
+
+### Configure Cloudflare
+
+```bash
+# Authenticate Wrangler
+npx wrangler login
+
+# Create the KV namespace
+npx wrangler kv:namespace create MOMENTUM_CACHE
+# Copy the namespace ID from the output, then update wrangler.toml:
+# Replace REPLACE_WITH_YOUR_KV_NAMESPACE_ID with the actual ID
+```
+
+### Set Secrets
+
+```bash
+npx wrangler secret put DATA_API_KEY    # your Twelve Data API key
+npx wrangler secret put REFRESH_SECRET  # any random string
+```
+
+### Test & Deploy
+
+```bash
+npm test           # run 49 unit tests (mocked — no real API calls)
+npx tsc --noEmit   # type check
+npm run deploy     # deploy to Cloudflare Workers
+```
+
+### Bootstrap KV (one-time)
+
+After deploying, trigger the cron pipeline once to populate KV before the first scheduled run:
+
+```bash
+npx wrangler dev &
+sleep 3
+
+# Trigger each cron in sequence — wait for each to finish before the next
+curl "http://localhost:8787/__scheduled?cron=0+0%2C12+*+*+*"   # Cron A (~6 min)
+# wait for it to finish in the wrangler dev output, then:
+curl "http://localhost:8787/__scheduled?cron=0+4%2C16+*+*+*"   # Cron B (~6 min)
+# wait, then:
+curl "http://localhost:8787/__scheduled?cron=0+8%2C20+*+*+*"   # Cron C (~30 sec)
+
+# Verify
+curl "http://localhost:8787/screen?top=5" | jq '.results[] | {rank, ticker, momentum: .momentum.percentage}'
+
+kill %1
+```
+
+Total bootstrap time: ~13 minutes (Twelve Data rate limiting: 8 requests/minute).
+
+---
+
+## Development
+
+```bash
+npm test              # run all 49 tests once
+npm run test:watch    # watch mode
+npx wrangler dev      # local dev server with KV simulation
+```
+
+Tests use mocked `fetch` and `KVNamespace` — no real API calls are made.
+
+---
 
 ## References
 
 - Gray, W. R., & Vogel, J. R. (2016). *Quantitative Momentum: A Practitioner's Guide to Building a Momentum-Based Stock Selection System*. Wiley.
+- [Twelve Data API](https://twelvedata.com)
+- [Cloudflare Workers](https://workers.cloudflare.com)
 
 ## License
 
