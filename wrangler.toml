@@ -6,8 +6,8 @@ compatibility_date = "2024-01-01"
 crons = ["0 0,12 * * *", "0 4,16 * * *", "0 8,20 * * *"]
 
 [[routes]]
-pattern = "momentum.ahariharan.me/*"
-zone_id = "4b49acb1b99febea0b1d58ba144773b1"
+pattern = "momentum.ahariharan.me"
+custom_domain = true
 
 [[kv_namespaces]]
 binding = "MOMENTUM_CACHE"
