@@ -1,9 +1,10 @@
 import type { Env } from "./types.js";
-import { getActiveTickers, getChangelog } from "./constituents.js";
+import { getActiveTickers } from "./constituents.js";
 import {
   getScreenResult,
   getCronSummary,
   getConstituentsUpdated,
+  getChangelog,
 } from "./cache.js";
 import { runCronA, runCronB, runCronC } from "./pipeline.js";
 

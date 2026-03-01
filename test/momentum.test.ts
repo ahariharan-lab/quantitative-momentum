@@ -654,7 +654,7 @@ describe("runCronC", () => {
     const screenPut = putCalls.find((c: string[]) => c[0] === "screen:sp100:latest");
     expect(screenPut).toBeDefined();
 
-    const screenResult = JSON.parse(screenPut[1]);
+    const screenResult = JSON.parse(screenPut![1]);
     expect(screenResult.status).toBe("ok"); // both partials were present
     expect(screenResult.results.length).toBeGreaterThan(0);
     expect(screenResult.results[0].rank).toBe(1);
@@ -705,7 +705,7 @@ describe("runCronC", () => {
     const putCalls = (kv.put as ReturnType<typeof vi.fn>).mock.calls;
     const screenPut = putCalls.find((c: string[]) => c[0] === "screen:sp100:latest");
     expect(screenPut).toBeDefined();
-    const screenResult = JSON.parse(screenPut[1]);
+    const screenResult = JSON.parse(screenPut![1]);
     expect(screenResult.status).toBe("partial");
   });
 });
